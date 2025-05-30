@@ -2,6 +2,9 @@
 #include <Adafruit_PWMServoDriver.h>
 #include <avr/interrupt.h>
 
+#define BAUD 9600
+#define MYUBRR F_CPU/16/BAUD-1
+
 const int TRIG_PIN = 9;
 const int ECHO_PIN = 10;
 const int BUTTON_PIN = 2;  // PD2 (INT0)
@@ -28,7 +31,8 @@ bool bufferFilled = false;
 float filteredDistance = 0;
 
 void setup() {
-  Serial.begin(9600);
+  // Inițializare UART
+  UART_Init(MYUBRR);
 
   // Configurare pini pentru ultrasonic sensor
   DDRB |= (1 << PB1);     // TRIG_PIN (pin 9) ca output
@@ -84,7 +88,7 @@ void loop() {
 void handleButtonPress() {
   if (buttonPressed) {
     buttonPressed = false;
-    Serial.println("Button pressed! Starting dance!");
+    UART_Print("Button pressed! Starting dance!\r\n");
     isDancing = true;
     danceStart = millis();
   }
@@ -123,10 +127,11 @@ void checkDistance() {
     filteredDistance = sum / count;
   }
 
-  Serial.print("Raw: ");
-  Serial.print(distance_cm);
-  Serial.print(" cm, Filtered: ");
-  Serial.println(filteredDistance);
+  UART_Print("Raw: ");
+  UART_PrintFloat(distance_cm, 1);
+  UART_Print(" cm, Filtered: ");
+  UART_PrintFloat(filteredDistance, 1);
+  UART_Print("\r\n");
 
   if (!isDancing) {
     if (filteredDistance > 0 && filteredDistance < DISTANCE_THRESHOLD && !isOpen) {
@@ -142,7 +147,7 @@ void checkDistance() {
 
 void performDance() {
   if (millis() - danceStart >= 10000) {
-    Serial.println("Dance finished.");
+    UART_Print("Dance finished.\r\n");
     isDancing = false;
     return;
   }
@@ -157,7 +162,7 @@ void performDance() {
 }
 
 void open() {
-  Serial.println("Opening petals...");
+  UART_Print("Opening petals...\r\n");
 
   for (int pos = SERVO_MIN; pos < SERVO_MAX; pos += 9) {
     pwm.setPWM(0, 0, pos);
@@ -169,12 +174,97 @@ void open() {
 }
 
 void close() {
-  Serial.println("Closing petals...");
+  UART_Print("Closing petals...\r\n");
   for (int pos = SERVO_MAX; pos > SERVO_MIN; pos -= 9) {
     pwm.setPWM(0, 0, pos);
     pwm.setPWM(1, 0, pos);
     pwm.setPWM(2, 0, pos);
     pwm.setPWM(3, 0, pos);
     delay(20);
+  }
+}
+
+// Funcții UART folosind registrii AVR
+void UART_Init(unsigned int ubrr) {
+  // Set baud rate
+  UBRR0H = (unsigned char)(ubrr >> 8);
+  UBRR0L = (unsigned char)ubrr;
+  
+  // Enable receiver and transmitter
+  UCSR0B = (1 << RXEN0) | (1 << TXEN0);
+  
+  // Set frame format: 8data, 2stop bit
+  UCSR0C = (1 << USBS0) | (3 << UCSZ00);
+}
+
+void UART_Transmit(unsigned char data) {
+  // Wait for empty transmit buffer
+  while (!(UCSR0A & (1 << UDRE0)));
+  
+  // Put data into buffer, sends the data
+  UDR0 = data;
+}
+
+void UART_Print(const char* str) {
+  while (*str) {
+    UART_Transmit(*str++);
+  }
+}
+
+void UART_PrintFloat(float value, int decimals) {
+  // Handle negative numbers
+  if (value < 0) {
+    UART_Transmit('-');
+    value = -value;
+  }
+  
+  // Print integer part
+  int intPart = (int)value;
+  UART_PrintInt(intPart);
+  
+  if (decimals > 0) {
+    UART_Transmit('.');
+    
+    // Print decimal part
+    float decPart = value - intPart;
+    for (int i = 0; i < decimals; i++) {
+      decPart *= 10;
+      int digit = (int)decPart;
+      UART_Transmit('0' + digit);
+      decPart -= digit;
+    }
+  }
+}
+
+void UART_PrintInt(int value) {
+  if (value == 0) {
+    UART_Transmit('0');
+    return;
+  }
+  
+  char buffer[10];
+  int i = 0;
+  
+  // Handle negative numbers
+  bool negative = false;
+  if (value < 0) {
+    negative = true;
+    value = -value;
+  }
+  
+  // Convert to string (reverse order)
+  while (value > 0) {
+    buffer[i++] = '0' + (value % 10);
+    value /= 10;
+  }
+  
+  // Add negative sign if needed
+  if (negative) {
+    UART_Transmit('-');
+  }
+  
+  // Print digits in correct order
+  for (int j = i - 1; j >= 0; j--) {
+    UART_Transmit(buffer[j]);
   }
 }
